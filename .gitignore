@@ -1,14 +1,38 @@
+# Build artifacts - Object files
+*.o
+*.a
+*.so
+*.so.*
+
+# Build artifacts - Executables
 src/charging/charging
-src/charging/main.o
 src/bootScreenSelector/bootScreenSelector
-src/bootScreenSelector/log_BSS.txt
-src/bootScreenSelector/main.o
-src/showScreen/main.o
 src/showScreen/show
-src/keymon/cJSON.o
-src/keymon/keymon
-src/keymon/keymon.o
-src/showScreen2/main.o
 src/showScreen2/showScreen2
-src/systemInfo/main.o
+src/keymon/keymon
 src/systemInfo/systemInfo
+src/volume/volume
+src/cpuclock_src/cpuclock
+src/openports/openport
+
+# Log files
+*.log
+**/log_*.txt
+
+# Temporary files
+*.tmp
+.tmp_*
+*.swp
+*.swo
+*~
+
+# IDE and editor files
+.vscode/
+.idea/
+*.sublime-*
+.DS_Store
+
+# Build directories
+build/
+dist/
+*.dSYM/

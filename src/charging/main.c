@@ -20,17 +20,24 @@
 #include <linux/fb.h>
 #include <poll.h>
 
+// Animation timing: 200ms delay between frames (200,000 microseconds)
 #define ANIMATION_DELAY 200000
+
+// Number of times to loop the full animation before going to black screen
 #define ANIMATION_LOOPS 10
+
+// Total number of animation frames (chargingState0.png through chargingState5.png)
 #define ANIMATION_IMAGES 6
 
+// ioctl commands for MI audio system
 #define MI_AO_SETVOLUME 0x4008690b
 #define MI_AO_GETVOLUME 0xc008690c
 
+// Display resolution for Miyoo Mini (may be 640x480 or 752x560 depending on variant)
 #define DISPLAY_WIDTH 640
 #define DISPLAY_HEIGHT 480
 
-//  Button Defines
+//  Button key code definitions (Linux input event codes)
 #define BUTTON_MENU   KEY_ESC
 #define BUTTON_POWER  KEY_POWER
 #define BUTTON_SELECT KEY_RIGHTCTRL
@@ -50,26 +57,38 @@
 #define BUTTON_VOLUMEUP		KEY_VOLUMEUP
 #define BUTTON_VOLUMEDOWN	KEY_VOLUMEDOWN
 
-//  for ev.value
-#define RELEASED  0
-#define PRESSED   1
-#define REPEAT    2
+//  Input event value definitions
+#define RELEASED  0  // Button released
+#define PRESSED   1  // Button pressed
+#define REPEAT    2  // Button held (repeat event)
 
 
 //  Global Variables
 static struct input_event ev;
 static int  input_fd = 0;
 static struct pollfd fds[1];
-static int is_charging = 0;
+static int is_charging = 0;  // 1 if device is currently charging, 0 otherwise
 static bool running = true;
 static bool screen_on = true;
-static int animation_image = 0;
-static int animation_loop = 0;
-static int mmp = 0;
+static int animation_image = 0;   // Current animation frame (0-5)
+static int animation_loop = 0;    // Current animation loop count
+static int mmp = 0;               // 1 if Miyoo Mini Plus/Flip (has AXP chip), 0 otherwise
 static time_t last_activity_time;
 
+
+/**
+ * Check if device is currently charging.
+ * 
+ * Detection method varies by device variant:
+ * - MM Plus/Flip: Uses AXP power management chip via axp_test binary
+ * - MM v1-v4: Reads GPIO pin 59 (0 = charging, 1 = not charging)
+ * 
+ * Updates global variable: is_charging
+ */
 void checkCharging(void) {
   int charging = 0;
+  
+  // Check for AXP chip (Miyoo Mini Plus/Flip)
   if (access("/customer/app/axp_test", F_OK) == 0) {
     mmp = 1;
     char *cmd = "cd /customer/app/ ; ./axp_test";
@@ -78,45 +97,91 @@ void checkCharging(void) {
     int battery = 0;
     int voltage = 0;
 
-    FILE *fp;
-    fp = popen(cmd, "r");
-    if (fgets(buf, axp_response_size, fp) != NULL)
-        sscanf(buf,  "{\"battery\":%d, \"voltage\":%d, \"charging\":%d}", &battery, &voltage, &charging);
+    FILE *fp = popen(cmd, "r");
+    if (!fp) {
+      fprintf(stderr, "Error: Cannot execute axp_test\n");
+      is_charging = 0;
+      return;
+    }
+
+    // Parse JSON response: {"battery":XX, "voltage":XXXX, "charging":X}
+    if (fgets(buf, axp_response_size, fp) != NULL) {
+      if (sscanf(buf, "{\"battery\":%d, \"voltage\":%d, \"charging\":%d}", 
+                 &battery, &voltage, &charging) != 3) {
+        fprintf(stderr, "Warning: Cannot parse axp_test output\n");
+        charging = 0;
+      }
+    }
     pclose(fp);
     is_charging = charging;
   } else {
+    // Miyoo Mini v1-v4: Read GPIO pin 59
     FILE *file = fopen("/sys/devices/gpiochip0/gpio/gpio59/value", "r");
-    if (file!=NULL) {
-      fscanf(file, "%i", &charging);
-      fclose(file);
+    if (!file) {
+      fprintf(stderr, "Error: Cannot open GPIO59 for charging detection\n");
+      is_charging = 0;
+      return;
     }
-    is_charging = charging;
+
+    if (fscanf(file, "%i", &charging) != 1) {
+      fprintf(stderr, "Warning: Cannot read GPIO59 value\n");
+      charging = 0;
+    }
+    fclose(file);
+    
+    // GPIO: 0 = charging, 1 = not charging (inverted logic)
+    is_charging = !charging;
   }
 }
 
+/**
+ * Log debug message to file (only if log file exists).
+ * Used for troubleshooting charging mode behavior.
+ * 
+ * @param Message Message string to log
+ */
 void logMessage(char* Message) {
-  if (access("/mnt/SDCARD/.tmp_update/log_charging_Message.txt", F_OK) == 0) {
-  FILE *file = fopen("/mnt/SDCARD/.tmp_update/log_charging_Message.txt", "a");
-  char valLog[200];
-  sprintf(valLog, "%s %s", Message, "\n");
-  fputs(valLog, file);
-  fclose(file);
-  } else {
-  system("touch /mnt/SDCARD/.tmp_update/log_charging_Message.txt");
-  FILE *file = fopen("/mnt/SDCARD/.tmp_update/log_charging_Message.txt", "a");
-  char valLog[200];
-  sprintf(valLog, "%s %s", Message, "\n");
-  fputs(valLog, file);
-  fclose(file);
+  const char* log_path = "/mnt/SDCARD/.tmp_update/log_charging_Message.txt";
+  
+  // Only log if debug log file already exists
+  if (access(log_path, F_OK) != 0) {
+    // Create log file if it doesn't exist
+    FILE *file = fopen(log_path, "w");
+    if (!file) {
+      fprintf(stderr, "Warning: Cannot create log file\n");
+      return;
+    }
+    fclose(file);
   }
+  
+  FILE *file = fopen(log_path, "a");
+  if (!file) {
+    fprintf(stderr, "Warning: Cannot open log file for appending\n");
+    return;
+  }
+  
+  fprintf(file, "%s\n", Message);
+  fclose(file);
 }
 
-void SetBrightness(int value) {  // value = 0-10
+/**
+ * Set screen brightness level.
+ * 
+ * @param value Brightness level from 0 (off) to 10 (maximum)
+ */
+void SetBrightness(int value) {
+  if (value < 0) value = 0;
+  if (value > 10) value = 10;
+  
   int fd = open("/sys/class/pwm/pwmchip0/pwm0/duty_cycle", O_WRONLY);
-  if (fd>=0) {
-    dprintf(fd,"%d",value*10);
-    close(fd);
+  if (fd < 0) {
+    fprintf(stderr, "Error: Cannot open PWM duty_cycle for brightness control\n");
+    return;
   }
+  
+  // PWM duty cycle: value * 10 (0-100 range)
+  dprintf(fd, "%d", value * 10);
+  close(fd);
 }
 
 static void sigHandler(int sig) {
