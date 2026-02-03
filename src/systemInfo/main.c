@@ -212,7 +212,9 @@ int main(int argc , char* argv[]) {
   }
 
   // Render final line, replacing newlines with spaces
-  for (i = 0; i <= strlen(prevLine); i++) {
+  // Cache strlen to avoid O(n²) complexity
+  size_t prevLine_len = strlen(prevLine);
+  for (i = 0; i <= prevLine_len; i++) {
     if(prevLine[i] == 10) prevLine[i] = 32;
   }
   sysVersion = TTF_RenderUTF8_Blended(font, prevLine, color_white);
@@ -231,7 +233,9 @@ int main(int argc , char* argv[]) {
 
   if (kor_version_str && strlen(kor_version_str)) {
     // Replace newlines with spaces
-    for (i = 0; i <= strlen(kor_version_str); i++) {
+    // Cache strlen to avoid O(n²) complexity
+    size_t kor_version_len = strlen(kor_version_str);
+    for (i = 0; i <= kor_version_len; i++) {
       if(kor_version_str[i] == 10) kor_version_str[i] = 32;
     }
     
